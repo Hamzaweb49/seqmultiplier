@@ -1,117 +1,174 @@
-module controller (
-  input wire clk,
-  input wire rst,
-  input wire start,
-  output reg enable_multiply
+module AddModule(
+    input logic clk,
+    input logic [15:0] multiplicand,
+    input logic [15:0] accumulator,
+    input logic add_signal,
+    output logic [15:0] accumulator_out
 );
+always @(posedge clk) begin
+    accumulator_out <= add_signal ? (multiplicand ^ accumulator) : accumulator;
+end
 
-  // Instantiate datapath
-  datapath dp_unit (.clk(clk), .rst(rst), .multiplicand(multiplicand), .multiplier(multiplier), .product());
-
-  reg [3:0] state;
-  parameter IDLE = 4'b0000;
-  parameter CHECK_LSB = 4'b0010;
-  parameter SELECT_MUL = 4'b0011;
-  parameter SELECT_ZERO = 4'b0100;
-  parameter ADD = 4'b0101;
-  parameter SHIFT = 4'b0110;
-
-  reg [3:0] count;  // Counter for shifting
-
-  always @(posedge clk or posedge rst) begin
-    if (rst) begin
-      state <= IDLE;
-      enable_multiply <= 1'b0;
-      count <= 4'b0;
-    end
-    else begin
-      case (state)
-        IDLE: begin
-          if (start) begin
-            count <= 4'b0;  // Reset count
-            enable_multiply <= 1'b1;
-            state <= CHECK_LSB;
-          end
-        end
-        CHECK_LSB: begin
-          if (dp_unit.Q[0])
-            state <= SELECT_MUL;
-          else
-            state <= SELECT_ZERO;
-        end
-        SELECT_MUL: begin
-          dp_unit.mux_out <= dp_unit.multiplier;  // Select multiplicand at mux output
-          state <= ADD;
-        end
-        SELECT_ZERO: begin
-          dp_unit.mux_out <= 16'b0;       // Select 0 at mux output
-          state <= ADD;
-        end
-        ADD: begin
-          {dp_unit.adder_out, dp_unit.carry} <= dp_unit.accumulator + dp_unit.mux_out + dp_unit.carry;  // Addition logic
-          dp_unit.accumulator <= dp_unit.adder_out;
-          state <= SHIFT;
-        end
-        SHIFT: begin
-          {dp_unit.accumulator, dp_unit.Q} <= {dp_unit.carry, dp_unit.accumulator, dp_unit.Q};  // Shift logic
-          count <= count + 1;
-
-          if (count > 15)  // Assuming 16 shifts for a 16-bit multiplier
-            state <= IDLE;
-          else
-            state <= CHECK_LSB;
-        end
-      endcase
-    end
-  end
 endmodule
 
-
-
-module datapath (
-  input wire clk,
-  input wire rst,
-  input wire [15:0] multiplicand,
-  input wire [15:0] multiplier,
-  output reg [31:0] product
+module ShiftModule(
+    input logic clk,
+    input logic reset,
+    input logic enable,
+    input logic [15:0] accumulator,
+    input logic [15:0] multiplier,
+    input logic [0:0] carry,
+    output logic [15:0] accumulator_out,
+    output reg [15:0] multiplier_out,
+    output logic [0:0] carry_out
 );
-  reg [15:0] accumulator;
-  reg [15:0] Q;
-  reg Q_lsb;
-  reg [15:0] mux_out;
-  reg [15:0] adder_out;
-  reg carry;
 
-  always @(posedge clk or posedge rst) begin
-    if (rst) begin
-      accumulator <= 16'b0;
-      Q <= 16'b0;
-      Q_lsb <= 1'b0;
-      mux_out <= 16'b0;
-      adder_out <= 16'b0;
-      carry <= 1'b0;
-      product <= {accumulator, Q};
+reg [15:0] shift_reg;
+reg carry_reg;
+
+always @(posedge clk or posedge reset) begin
+    if (reset) begin
+        shift_reg <= 16'b0;
+        carry_reg <= 1'b0;
+    end else if (enable) begin
+        carry_reg <= carry_reg >> 1;
+        shift_reg <= accumulator >> 1;
+        multiplier_out <= multiplier >> 1;
     end
-    else begin
-      // Multiplexer
-      if (Q_lsb)
-        mux_out <= multiplier;
-      else
-        mux_out <= 16'b0;
+end
 
-      // Adder
-      {adder_out, carry} <= accumulator + mux_out + carry;  // Addition logic
-      accumulator <= adder_out;
+assign accumulator_out = shift_reg;
+assign carry_out = carry_reg;
 
-      // Right shift operation
-      {accumulator, Q} <= {carry, accumulator, Q};  // Shift logic
-
-      // Update Q and Q_lsb
-      Q_lsb <= Q[0];
-      Q <= Q >> 1;
-
-      // Output the product
-      product <= {accumulator, Q};
-    end
-  end
 endmodule
+
+module MuxModule(
+    input logic [15:0] multiplicand,
+    input logic [15:0] zeros,
+    input logic mux_signal,
+    output logic [15:0] selected_input
+);
+
+assign selected_input = mux_signal ? multiplicand : zeros;
+
+endmodule
+
+module Datapath(
+    input logic clk,
+    input logic reset,
+    input logic start,
+    input logic add_signal,
+    input logic shift_signal,
+    input logic mux_signal,
+    input logic [15:0] multiplicand,
+    input logic [15:0] accumulator,
+    input logic [15:0] multiplier,
+    output logic [31:0] product
+);
+
+logic [15:0] shift_reg_shift;
+reg [15:0] shift_reg_mux;
+reg [15:0] intermediate_accumulator;
+logic [15:0] shift_multiplier; 
+reg carry;
+
+
+// Mux Module instantiation
+MuxModule mux_inst(
+    .multiplicand(multiplicand), 
+    .zeros(16'b0),
+    .mux_signal(mux_signal), 
+    .selected_input(shift_reg_mux)
+);
+
+always @(posedge reset) begin
+
+end
+
+
+// // Add Module instantiation
+AddModule add_inst(.clk(clk), .multiplicand(shift_reg_mux), .accumulator(accumulator),
+                  .add_signal(add_signal), .accumulator_out(intermediate_accumulator));
+
+// Shift Module instantiation
+ShiftModule shift_inst(
+    .clk(clk), 
+    .reset(reset), 
+    .enable(shift_signal),
+    .accumulator(intermediate_accumulator), 
+    .multiplier(multiplier),
+    .carry(carry), 
+    .accumulator_out(shift_reg_shift),
+    .multiplier_out(shift_multiplier), 
+    .carry_out(carry)
+);
+
+// Output product
+assign product = {shift_reg_shift, shift_multiplier};
+
+endmodule
+
+module Controller(
+    input logic clk,
+    input logic reset,
+    input logic start,
+    input logic [15:0] multiplier,
+    output reg add_signal,
+    output reg shift_signal,
+    output reg mux_signal
+);
+
+parameter IDLE = 2'b00;
+parameter ADD = 2'b01;
+parameter SHIFT = 2'b10;
+parameter FINISH = 2'b11;
+
+reg [1:0] state;
+reg [3:0] count;
+
+
+always @(posedge clk or posedge reset) begin
+    if (reset) begin
+        state <= IDLE;
+        count <= 4'b0;
+        add_signal <= 1'b0;
+        shift_signal <= 1'b0;
+        mux_signal <= 1'b0;
+    end else begin
+        case (state)
+            IDLE: begin
+                if (start) begin
+                    state <= ADD;
+                    count <= 4'b0;
+                    add_signal <= 1'b0;
+                    shift_signal <= 1'b0;
+                    mux_signal <= 1'b0;
+                end
+            end
+            ADD: begin
+                mux_signal = multiplier[0];
+                add_signal = 1'b1;
+                state <= SHIFT;
+            end
+            SHIFT: begin
+                if (count < 16) begin
+                    count <= count + 1;
+                    shift_signal <= 1'b1;
+                    state <= ADD;
+                end else begin
+                    state <= FINISH;
+                end
+            end
+            FINISH: begin
+                state <= IDLE;
+            end
+            default: state <= IDLE;
+        endcase
+    end
+end
+
+endmodule
+
+// always @(posedge clk) begin
+// $display("The values of intermediate accumulator is %b:", intermediate_accumulator);
+// end
